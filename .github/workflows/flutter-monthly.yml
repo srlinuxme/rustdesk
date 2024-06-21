@@ -1,0 +1,15 @@
+name: Flutter Monthly Build
+
+on:
+  schedule:
+    # schedule build every fist day of month
+    - cron: "0 0 1 * *"
+  workflow_dispatch:
+
+jobs:
+  run-flutter-monthly-build:
+    uses: ./.github/workflows/flutter-build-mega.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: "monthly"
