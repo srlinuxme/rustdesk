@@ -1,0 +1,12 @@
+name: Flutter Apple arm64 Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-flutter-nightly-build:
+    uses: ./.github/workflows/apple-arm64-mega.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: "macos-arm64"
