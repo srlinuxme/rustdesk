@@ -143,11 +143,6 @@ class _WidgetOPState extends State<WidgetOP> {
   String _url = '';
 
   @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
   void dispose() {
     super.dispose();
     _updateTimer?.cancel();
@@ -683,7 +678,7 @@ Future<bool?> verificationCodeDialog(
                       labelText: "Email", prefixIcon: Icon(Icons.email)),
                   readOnly: true,
                   controller: TextEditingController(text: user?.email),
-                )),
+                ).workaroundFreezeLinuxMint()),
             isEmailVerification ? const SizedBox(height: 8) : const Offstage(),
             codeField,
             /*

@@ -22,6 +22,10 @@ pub const NAME: &'static str = "audio";
 pub const AUDIO_DATA_SIZE_U8: usize = 960 * 4; // 10ms in 48000 stereo
 static RESTARTING: AtomicBool = AtomicBool::new(false);
 
+lazy_static::lazy_static! {
+    static ref VOICE_CALL_INPUT_DEVICE: Arc::<Mutex::<Option<String>>> = Default::default();
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub fn new() -> GenericService {
     let svc = EmptyExtraFieldService::new(NAME.to_owned(), true);
@@ -36,6 +40,33 @@ pub fn new() -> GenericService {
     svc.sp
 }
 
+#[inline]
+pub fn get_voice_call_input_device() -> Option<String> {
+    VOICE_CALL_INPUT_DEVICE.lock().unwrap().clone()
+}
+
+#[inline]
+pub fn set_voice_call_input_device(device: Option<String>, set_if_present: bool) {
+    if !set_if_present && VOICE_CALL_INPUT_DEVICE.lock().unwrap().is_some() {
+        return;
+    }
+
+    if *VOICE_CALL_INPUT_DEVICE.lock().unwrap() == device {
+        return;
+    }
+    *VOICE_CALL_INPUT_DEVICE.lock().unwrap() = device;
+    restart();
+}
+
+#[inline]
+fn get_audio_input() -> String {
+    VOICE_CALL_INPUT_DEVICE
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or(Config::get_option("audio-input"))
+}
+
 pub fn restart() {
     log::info!("restart the audio service, freezing now...");
     if RESTARTING.load(Ordering::SeqCst) {
@@ -47,6 +78,19 @@ pub fn restart() {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod pa_impl {
     use super::*;
+
+    // SAFETY: constrains of hbb_common::mem::aligned_u8_vec must be held
+    unsafe fn align_to_32(data: Vec<u8>) -> Vec<u8> {
+        if (data.as_ptr() as usize & 3) == 0 {
+            return data;
+        }
+
+        let mut buf = vec![];
+        buf = unsafe { hbb_common::mem::aligned_u8_vec(data.len(), 4) };
+        buf.extend_from_slice(data.as_ref());
+        buf
+    }
+
     #[tokio::main(flavor = "current_thread")]
     pub async fn run(sp: EmptyExtraFieldService) -> ResultType<()> {
         hbb_common::sleep(0.1).await; // one moment to wait for _pa ipc
@@ -62,7 +106,7 @@ mod pa_impl {
             stream
                 .send(&crate::ipc::Data::Config((
                     "audio-input".to_owned(),
-                    Some(Config::get_option("audio-input"))
+                    Some(super::get_audio_input())
                 )))
                 .await
         );
@@ -75,23 +119,29 @@ mod pa_impl {
                 sps.send(create_format_msg(crate::platform::PA_SAMPLE_RATE, 2));
                 Ok(())
             })?;
+
             #[cfg(target_os = "linux")]
             if let Ok(data) = stream.next_raw().await {
                 if data.len() == 0 {
                     send_f32(&zero_audio_frame, &mut encoder, &sp);
                     continue;
                 }
+
                 if data.len() != AUDIO_DATA_SIZE_U8 {
                     continue;
                 }
+
+                let data = unsafe { align_to_32(data.into()) };
                 let data = unsafe {
                     std::slice::from_raw_parts::<f32>(data.as_ptr() as _, data.len() / 4)
                 };
                 send_f32(data, &mut encoder, &sp);
             }
+
             #[cfg(target_os = "android")]
             if scrap::android::ffi::get_audio_raw(&mut android_data, &mut vec![]).is_some() {
                 let data = unsafe {
+                    android_data = align_to_32(android_data);
                     std::slice::from_raw_parts::<f32>(
                         android_data.as_ptr() as _,
                         android_data.len() / 4,
@@ -106,6 +156,14 @@ mod pa_impl {
     }
 }
 
+#[inline]
+#[cfg(feature = "screencapturekit")]
+pub fn is_screen_capture_kit_available() -> bool {
+    cpal::available_hosts()
+        .iter()
+        .any(|host| *host == cpal::HostId::ScreenCaptureKit)
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod cpal_impl {
     use self::service::{Reset, ServiceSwap};
@@ -118,6 +176,11 @@ mod cpal_impl {
     lazy_static::lazy_static! {
         static ref HOST: Host = cpal::default_host();
         static ref INPUT_BUFFER: Arc<Mutex<std::collections::VecDeque<f32>>> = Default::default();
+    }
+
+    #[cfg(feature = "screencapturekit")]
+    lazy_static::lazy_static! {
+        static ref HOST_SCREEN_CAPTURE_KIT: Result<Host, cpal::HostUnavailable> = cpal::host_from_id(cpal::HostId::ScreenCaptureKit);
     }
 
     #[derive(Default)]
@@ -196,9 +259,30 @@ mod cpal_impl {
         send_f32(&data, encoder, sp);
     }
 
+    #[cfg(feature = "screencapturekit")]
+    fn get_device() -> ResultType<(Device, SupportedStreamConfig)> {
+        let audio_input = super::get_audio_input();
+        if !audio_input.is_empty() {
+            return get_audio_input(&audio_input);
+        }
+        if !is_screen_capture_kit_available() {
+            return get_audio_input("");
+        }
+        let device = HOST_SCREEN_CAPTURE_KIT
+            .as_ref()?
+            .default_input_device()
+            .with_context(|| "Failed to get default input device for loopback")?;
+        let format = device
+            .default_input_config()
+            .map_err(|e| anyhow!(e))
+            .with_context(|| "Failed to get input output format")?;
+        log::info!("Default input format: {:?}", format);
+        Ok((device, format))
+    }
+
     #[cfg(windows)]
     fn get_device() -> ResultType<(Device, SupportedStreamConfig)> {
-        let audio_input = Config::get_option("audio-input");
+        let audio_input = super::get_audio_input();
         if !audio_input.is_empty() {
             return get_audio_input(&audio_input);
         }
@@ -217,15 +301,28 @@ mod cpal_impl {
         Ok((device, format))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, feature = "screencapturekit")))]
     fn get_device() -> ResultType<(Device, SupportedStreamConfig)> {
-        let audio_input = Config::get_option("audio-input");
+        let audio_input = super::get_audio_input();
         get_audio_input(&audio_input)
     }
 
     fn get_audio_input(audio_input: &str) -> ResultType<(Device, SupportedStreamConfig)> {
         let mut device = None;
-        if !audio_input.is_empty() {
+        #[cfg(feature = "screencapturekit")]
+        if !audio_input.is_empty() && is_screen_capture_kit_available() {
+            for d in HOST_SCREEN_CAPTURE_KIT
+                .as_ref()?
+                .devices()
+                .with_context(|| "Failed to get audio devices")?
+            {
+                if d.name().unwrap_or("".to_owned()) == audio_input {
+                    device = Some(d);
+                    break;
+                }
+            }
+        }
+        if device.is_none() && !audio_input.is_empty() {
             for d in HOST
                 .devices()
                 .with_context(|| "Failed to get audio devices")?

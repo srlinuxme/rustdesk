@@ -71,7 +71,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           final ffi = remotePage.ffi;
           bind.setCurSessionId(sessionId: ffi.sessionId);
         }
-        WindowController.fromWindowId(windowId())
+        WindowController.fromWindowId(params['windowId'])
             .setTitle(getWindowNameWithId(id));
         UnreadChatCountState.find(id).value = 0;
       };
@@ -98,15 +98,14 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       ));
       _update_remote_count();
     }
+    tabController.onRemoved = (_, id) => onRemoveId(id);
+    rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
   }
 
   @override
   void initState() {
     super.initState();
 
-    tabController.onRemoved = (_, id) => onRemoveId(id);
-
-    rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
     if (!_isScreenRectSet) {
       Future.delayed(Duration.zero, () {
         restoreWindowPosition(
@@ -122,11 +121,6 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
   }
 
   @override
-  void dispose() {
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final child = Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
@@ -134,6 +128,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
         tail: const AddButton(),
+        selectedBorderColor: MyTheme.accent,
         pageViewBuilder: (pageView) => pageView,
         labelGetter: DesktopTab.tablabelGetter,
         tabBuilder: (key, icon, label, themeConf) => Obx(() {
@@ -217,14 +212,16 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
     );
     final tabWidget = isLinux
         ? buildVirtualWindowFrame(context, child)
-        : Obx(() => Container(
-              decoration: BoxDecoration(
-                border: Border.all(
-                    color: MyTheme.color(context).border!,
-                    width: stateGlobal.windowBorderWidth.value),
-              ),
-              child: child,
-            ));
+        : workaroundWindowBorder(
+            context,
+            Obx(() => Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                        color: MyTheme.color(context).border!,
+                        width: stateGlobal.windowBorderWidth.value),
+                  ),
+                  child: child,
+                )));
     return isMacOS || kUseCompatibleUiMode
         ? tabWidget
         : Obx(() => SubWindowDragToResizeArea(
@@ -233,6 +230,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
               // Specially configured for a better resize area and remote control.
               childPadding: kDragToResizeAreaPadding,
               resizeEdgeSize: stateGlobal.resizeEdgeSize.value,
+              enableResizeEdges: subWindowManagerEnableResizeEdges,
               windowId: stateGlobal.windowId,
             ));
   }
@@ -399,7 +397,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       RemoteCountState.find().value = tabController.length;
 
   Future<dynamic> _remoteMethodHandler(call, fromWindowId) async {
-    print(
+    debugPrint(
         "[Remote Page] call ${call.method} with args ${call.arguments} from window $fromWindowId");
 
     dynamic returnValue;
@@ -413,12 +411,14 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       final display = args['display'];
       final displays = args['displays'];
       final screenRect = parseParamScreenRect(args);
+      final prePeerCount = tabController.length;
       Future.delayed(Duration.zero, () async {
         if (stateGlobal.fullscreen.isTrue) {
           await WindowController.fromWindowId(windowId()).setFullscreen(false);
           stateGlobal.setFullscreen(false, procWnd: false);
         }
-        await setNewConnectWindowFrame(windowId(), id!, display, screenRect);
+        await setNewConnectWindowFrame(
+            windowId(), id!, prePeerCount, display, screenRect);
         Future.delayed(Duration(milliseconds: isWindows ? 100 : 0), () async {
           await windowOnTop(windowId());
         });
