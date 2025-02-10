@@ -974,6 +974,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
+
           flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
 
       - name: Patch flutter
