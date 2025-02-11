@@ -79,6 +79,8 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
 class _RawTouchGestureDetectorRegionState
     extends State<RawTouchGestureDetectorRegion> {
   Offset _cacheLongPressPosition = Offset(0, 0);
+  // Timestamp of the last long press event.
+  int _cacheLongPressPositionTs = 0;
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
 
@@ -181,7 +183,6 @@ class _RawTouchGestureDetectorRegionState
     if (handleTouch) {
       _lastPosOfDoubleTapDown = d.localPosition;
       _cacheLongPressPosition = d.localPosition;
-
       if (!ffi.cursorModel.isInRemoteRect(d.localPosition)) {
         return;
       }
