@@ -103,6 +103,8 @@ enum DesktopType {
 class IconFont {
   static const _family1 = 'Tabbar';
   static const _family2 = 'PeerSearchbar';
+  static const _family3 = 'AddressBook';
+  static const _family4 = 'DeviceGroup';
   IconFont._();
 
   static const IconData max = IconData(0xe606, fontFamily: _family1);
@@ -113,8 +115,11 @@ class IconFont {
   static const IconData menu = IconData(0xe628, fontFamily: _family1);
   static const IconData search = IconData(0xe6a4, fontFamily: _family2);
   static const IconData roundClose = IconData(0xe6ed, fontFamily: _family2);
-  static const IconData addressBook =
-      IconData(0xe602, fontFamily: "AddressBook");
+  static const IconData addressBook = IconData(0xe602, fontFamily: _family3);
+  static const IconData deviceGroupOutline =
+      IconData(0xe623, fontFamily: _family4);
+  static const IconData deviceGroupFill =
+      IconData(0xe748, fontFamily: _family4);
 }
 
 class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
@@ -817,7 +822,11 @@ class OverlayDialogManager {
 
     close([res]) {
       _dialogs.remove(dialogTag);
-      dialog.complete(res);
+      try {
+        dialog.complete(res);
+      } catch (e) {
+        debugPrint("Dialog complete catch error: $e");
+      }
       BackButtonInterceptor.removeByName(dialogTag);
     }
 
@@ -3695,4 +3704,19 @@ Widget workaroundWindowBorder(BuildContext context, Widget child) {
       ...borders,
     ],
   );
+}
+
+void updateTextAndPreserveSelection(
+    TextEditingController controller, String text) {
+  // Only care about select all for now.
+  final isSelected = controller.selection.isValid &&
+      controller.selection.end > controller.selection.start;
+
+  // Set text will make the selection invalid.
+  controller.text = text;
+
+  if (isSelected) {
+    controller.selection = TextSelection(
+        baseOffset: 0, extentOffset: controller.value.text.length);
+  }
 }
